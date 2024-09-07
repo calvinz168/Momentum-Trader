@@ -1,3 +1,4 @@
+from logging import exception
 from twelvedata import TDClient
 import json
 import numpy as np
@@ -115,15 +116,15 @@ def evaluate_stock_criteria(data, ticker):
         result["predicted_cross"] = "H"
 
     # Evaluate price movement (open, high, low, close)
-    most_recent = data[-1]
-    open_price = float(most_recent["open"])
+    most_recent = data[0]
+    prev_close = float(data[1]["close"])
     close_price = float(most_recent["close"])
     high_price = float(most_recent["high"])
     low_price = float(most_recent["low"])
 
-    if close_price > open_price and high_price == close_price and low_price == open_price:
+    if close_price > prev_close and low_price >= close_price * 0.95:
         result["price_movement"] = "B"
-    elif close_price < open_price and low_price == close_price and high_price == open_price:
+    elif close_price < prev_close and high_price <= close_price * 1.05:
         result["price_movement"] = "S"
     else:
         result["price_movement"] = "H"
@@ -137,7 +138,24 @@ def get_tickers():
     
     return [line.strip() for line in lines]
 
-important_list = []
+# Important lists
+important_buy_list = []
+important_sell_list = []
+
+def output_sorted():
+    print("Ticker: MACD Cross / SYM / Predicted Cross")
+    print("\nBuy:")
+    for stock in important_buy_list:
+        ticker = stock.split(":")[0]
+        cross, trend, pred_cross = stock.split(":")[1].split(", ")
+        print(f"{ticker}: {cross} {trend} {pred_cross}")
+
+    print("\nSell:")
+    for stock in important_sell_list:
+        ticker = stock.split(":")[0]
+        cross, trend, pred_cross = stock.split(":")[1].split(", ")
+        print(f"{ticker}: {cross} {trend} {pred_cross}")
+
 tickers = get_tickers()
 
 key_index = 0  # Start with the first client
@@ -147,17 +165,23 @@ for i in range(0, len(tickers), batch_size):
     batch_tickers = tickers[i:i + batch_size]
     client = clients[key_index]
     values = get_macd(",".join(batch_tickers), "1day", client)
+    
     if values:
         for ticker in batch_tickers:
             evaluation = evaluate_stock_criteria(values[ticker], ticker)
-            # Count the number of "B" evaluations
+            # Count the number of "B" and "S" evaluations
             b_count = sum(1 for key in ["cross", "price_movement", "predicted_cross"] if evaluation[key] == "B")
             s_count = sum(1 for key in ["cross", "price_movement", "predicted_cross"] if evaluation[key] == "S")
             
-            if b_count >= 2 or s_count >= 2 or evaluation["cross"] != "H":
-                important_list.append(f"{evaluation['ticker']}: Cross - {evaluation['cross']}, SYM - {evaluation['price_movement']}, Predicted Cross - {evaluation['predicted_cross']}")
+            stock_info = f"{evaluation['ticker']}: {evaluation['cross']}, {evaluation['price_movement']}, {evaluation['predicted_cross']}"
+            
             print(evaluation)
-    
+            if b_count >= 2:
+                important_buy_list.append(stock_info)
+            elif s_count >= 2:
+                important_sell_list.append(stock_info)
+
+
     key_index += 1
     
     # If all clients have been used, reset the index and sleep for 61 seconds
@@ -166,8 +190,15 @@ for i in range(0, len(tickers), batch_size):
         print("Processed one full cycle of keys. Sleeping for 61 seconds.")
         time.sleep(61)
 
-print(f"Important stocks: {important_list}")
+# Output the sorted lists
+output_sorted()
 
-# Send email alerts with the important stocks
-# send_email("6476688618@txt.freedommobile.ca", "Ticker: MACD/SYM", f"{important_list}")
-# send_email("4168783284@txt.freedommobile.ca", "Ticker: MACD/SYM", f"{important_list}")
+# Convert the lists to strings for email content
+buy_stocks_string = "\n".join(important_buy_list)
+sell_stocks_string = "\n".join(important_sell_list)
+
+# Prepare email content
+email_body = f"Buy:\n{buy_stocks_string}\n\nSell:\n{sell_stocks_string}"
+
+# Send email with the combined summary
+send_email("calvinz168@gmail.com", f"Stocks Summary - {datetime.now().date()}", email_body)
