@@ -16,7 +16,15 @@ keys = config['keys']  # List of API keys
 # Initialize clients
 clients = [TDClient(apikey=key) for key in keys]
 
-def get_macd(stocks, interval, client):
+
+# Calculate moving averages for 5, 10, and 20 days
+def moving_average(prices, days):
+    if len(prices) >= days:
+        return sum(prices[:days]) / days
+    return None  # Not enough data for this period
+
+
+def get_data(stocks, interval, client):
     ts = client.time_series(
         symbol=stocks,
         interval=interval,
@@ -25,35 +33,48 @@ def get_macd(stocks, interval, client):
     )
 
     data = ts.with_macd().as_json()
-    macd_values = {ticker: [] for ticker in stocks.split(',')}
+    values = {ticker: [] for ticker in stocks.split(',')}
+    closing_prices = {ticker: [] for ticker in stocks.split(',')}
     
     for ticker, entries in data.items():
         for entry in entries:
+            closing_prices[ticker].append(float(entry["close"]))
+
+    for ticker, entries in data.items():
+        for idx, entry in enumerate(entries):
             datetime_str = entry["datetime"]
             macd = float(entry["macd"])
             macd_signal = float(entry["macd_signal"])
             macd_hist = float(entry["macd_hist"])
-            open = float(entry["open"])
-            close = float(entry["close"])
+            open_price = float(entry["open"])
+            close_price = float(entry["close"])
             high = float(entry["high"])
             low = float(entry["low"])
             
-            macd_values[ticker].append({
+            ma_5 = sum(closing_prices[ticker][idx:idx+5]) / (5)
+            ma_10 = sum(closing_prices[ticker][idx:idx+10]) / (10)
+            ma_20 = sum(closing_prices[ticker][idx:idx+20]) / (20)
+
+            # Append the entry with calculated moving averages
+            values[ticker].append({
                 "datetime": datetime_str,
                 "macd": macd,
                 "macd_signal": macd_signal,
                 "macd_hist": macd_hist,
-                "open": open,
-                "close": close,
+                "open": open_price,
+                "close": close_price,
                 "high": high,
-                "low": low
+                "low": low,
+                "ma_5": ma_5,
+                "ma_10": ma_10,
+                "ma_20": ma_20
             })
 
-    return macd_values
+    return values
 
 
 def evaluate_stock_criteria(data, ticker):
-    result = {"ticker": ticker, "cross": "H", "trend": "", "predicted_cross": "", "price_movement": ""}
+    result = {"ticker": ticker, "cross": "H", "trend": "H", "predicted_cross": "H", "moving_average": "H"}
 
     # Detect MACD crossover in the last 2 days
     crosses = []
@@ -121,14 +142,27 @@ def evaluate_stock_criteria(data, ticker):
     close_price = float(most_recent["close"])
     high_price = float(most_recent["high"])
     low_price = float(most_recent["low"])
+    open_price = float(most_recent["open"])
 
     if close_price > prev_close and low_price >= close_price * 0.95:
-        result["price_movement"] = "B"
-    elif close_price < prev_close and high_price <= close_price * 1.05:
-        result["price_movement"] = "S"
+        result["sym"] = "B"
+    elif close_price < prev_close and high_price <= open_price * 1.05:
+        result["sym"] = "S"
     else:
-        result["price_movement"] = "H"
+        result["sym"] = "H"
 
+    ma5 = float(data[0]["ma_5"])
+    ma10 = float(data[0]["ma_10"])
+    ma20 = float(data[0]["ma_20"])
+    
+    if ma5 and ma10 and ma20:
+        if ma5 > ma10 and ma10 > ma20:
+            result["moving_average"] = "B"  # 5-day > 10-day > 20-day
+        elif ma5 < ma10 and ma10 < ma20:
+            result["moving_average"] = "S"  # 5-day < 10-day < 20-day
+        else:
+            result["moving_average"] = "H"  # No specific trend
+    
     return result
 
 
@@ -143,18 +177,18 @@ important_buy_list = []
 important_sell_list = []
 
 def output_sorted():
-    print("Ticker: MACD Cross / SYM / Predicted Cross")
+    print("Ticker: MACD Cross / SYM / SMA")
     print("\nBuy:")
     for stock in important_buy_list:
         ticker = stock.split(":")[0]
-        cross, trend, pred_cross = stock.split(":")[1].split(", ")
-        print(f"{ticker}: {cross} {trend} {pred_cross}")
+        cross, trend, ma = stock.split(":")[1].split(", ")
+        print(f"{ticker}: {cross} {trend} {ma}")
 
     print("\nSell:")
     for stock in important_sell_list:
         ticker = stock.split(":")[0]
-        cross, trend, pred_cross = stock.split(":")[1].split(", ")
-        print(f"{ticker}: {cross} {trend} {pred_cross}")
+        cross, trend, ma = stock.split(":")[1].split(", ")
+        print(f"{ticker}: {cross} {trend} {ma}")
 
 tickers = get_tickers()
 
@@ -164,21 +198,21 @@ batch_size = 4
 for i in range(0, len(tickers), batch_size):
     batch_tickers = tickers[i:i + batch_size]
     client = clients[key_index]
-    values = get_macd(",".join(batch_tickers), "1day", client)
+    values = get_data(",".join(batch_tickers), "1day", client)
     
     if values:
         for ticker in batch_tickers:
             evaluation = evaluate_stock_criteria(values[ticker], ticker)
             # Count the number of "B" and "S" evaluations
-            b_count = sum(1 for key in ["cross", "price_movement", "predicted_cross"] if evaluation[key] == "B")
-            s_count = sum(1 for key in ["cross", "price_movement", "predicted_cross"] if evaluation[key] == "S")
+            b_count = sum(1 for key in ["cross", "sym", "moving_average"] if evaluation[key] == "B")
+            s_count = sum(1 for key in ["cross", "sym", "moving_average"] if evaluation[key] == "S")
             
-            stock_info = f"{evaluation['ticker']}: {evaluation['cross']}, {evaluation['price_movement']}, {evaluation['predicted_cross']}"
+            stock_info = f"{evaluation['ticker']}: {evaluation['cross']}, {evaluation['sym']}, {evaluation['moving_average']}"
             
             print(evaluation)
-            if b_count >= 2:
+            if b_count > 2:
                 important_buy_list.append(stock_info)
-            elif s_count >= 2:
+            elif s_count > 2:
                 important_sell_list.append(stock_info)
 
 
