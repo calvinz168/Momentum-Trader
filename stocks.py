@@ -232,7 +232,7 @@ buy_stocks_string = "\n".join(important_buy_list)
 sell_stocks_string = "\n".join(important_sell_list)
 
 # Prepare email content
-email_body = f"Buy:\n{buy_stocks_string}\n\nSell:\n{sell_stocks_string}"
+email_body = f"Ticker: MACD Cross / SYM / SMA\nBuy:\n{buy_stocks_string}\n\nSell:\n{sell_stocks_string}"
 
 # Send email with the combined summary
 send_email("calvinz168@gmail.com", f"Stocks Summary - {datetime.now().date()}", email_body)
